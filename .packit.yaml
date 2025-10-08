@@ -1,50 +1,59 @@
-specfile_path: packaging/cla-rust.spec
+---
+upstream_project_url: https://github.com/r0x0d/cla-rust
 upstream_package_name: cla-rust
 downstream_package_name: cla-rust
-upstream_project_url: https://github.com/r0x0d/cla-rust
 
-srpm_build_deps: []
+upstream_tag_template: v{version}
+
+specfile_path: packaging/cla-rust.spec
+
+srpm_build_deps:
+  - cargo
+  - git
+  - libzstd-devel
+
+actions:
+  # The last step here is required by Packit to return the archive name
+  # https://packit.dev/docs/configuration/actions#create-archive
+  create-archive:
+    - bash -c "cargo install cargo-vendor-filterer"
+    - bash -c "cargo xtask spec"
+    - bash -c "cat target/cla-rust.spec"
+    - bash -c "cp target/cla-rust* packaging/"
+    - bash -c "ls -1 target/cla-rust*.tar.zstd | grep -v 'vendor'"
+  # Do nothing with spec file. Two steps here are for debugging
+  fix-spec-file:
+    - bash -c "cat packaging/cla-rust.spec"
+    - bash -c "ls -al packaging/"
 
 jobs:
   # Build RPMs for each pull request
   - job: copr_build
     trigger: pull_request
-    owner: "@r0x0d"
+    owner: "rolivier"
     project: cla-rust
     targets:
-      - epel-9-x86_64
-      - epel-9-aarch64
-      - epel-9-ppc64le
-      - epel-9-s390x
-      - epel-10-x86_64
-      - epel-10-aarch64
-      - epel-10-ppc64le
-      - epel-10-s390x
-    actions:
-      # do not get the version from a tag (git describe) but from the spec file
-      get-current-version:
-        - grep -oP '^Version:\s+\K\S+' packaging/cla-rust.spec
+      - rhel-9-x86_64
+      - rhel-9-aarch64
+      - epel-9-ppc64le # there is no rhel9-ppc64le in copr
+      - rhel-9-s390x
+      - rhel-10-x86_64
+      - rhel-10-aarch64
+      - rhel-10-ppc64le
+      - rhel-10-s390x
 
   # Build RPMs for main branch
   - job: copr_build
     trigger: commit
     branch: main
-    owner: "@r0x0d"
+    owner: "rolivier"
     project: cla-rust
     targets:
-      - epel-9-x86_64
-      - epel-9-aarch64
-      - epel-9-ppc64le
-      - epel-9-s390x
-      - epel-10-x86_64
-      - epel-10-aarch64
-      - epel-10-ppc64le
-      - epel-10-s390x
-    actions:
-      # bump spec so we get release starting with 2 and hence all the default branch builds will
-      # have higher NVR than all the PR builds
-      post-upstream-clone:
-        - rpmdev-bumpspec --comment='latest upstream build' ./packaging/cla-rust.spec
-      # do not get the version from a tag (git describe) but from the spec file
-      get-current-version:
-        - grep -oP '^Version:\s+\K\S+' packaging/cla-rust.spec
+      - rhel-9-x86_64
+      - rhel-9-aarch64
+      - epel-9-ppc64le # there is no rhel9-ppc64le in copr
+      - rhel-9-s390x
+      - rhel-10-x86_64
+      - rhel-10-aarch64
+      - rhel-10-ppc64le
+      - rhel-10-s390x
