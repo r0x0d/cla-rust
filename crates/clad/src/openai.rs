@@ -25,6 +25,10 @@ pub struct ChatCompletionRequest {
     pub frequency_penalty: Option<f32>,
     #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
+    pub tools: Option<Vec<Tool>>,
+    #[serde(default)]
+    pub tool_choice: Option<Value>,
     /// Additional fields that might be present
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, Value>,
@@ -34,9 +38,45 @@ pub struct ChatCompletionRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub role: String,
+    #[serde(default)]
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+/// Tool call structure for function calling
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: FunctionCall,
+}
+
+/// Function call details
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Tool definition structure
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: FunctionDefinition,
+}
+
+/// Function definition for tools
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FunctionDefinition {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub parameters: Value,
 }
 
 /// OpenAI chat completion response structure
@@ -88,6 +128,8 @@ pub struct Delta {
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// Models list response
@@ -119,6 +161,7 @@ mod tests {
                     role: "user".to_string(),
                     content: "Hello".to_string(),
                     name: None,
+                    tool_calls: None,
                 },
             ],
             temperature: Some(0.8),
@@ -130,6 +173,8 @@ mod tests {
             presence_penalty: None,
             frequency_penalty: None,
             user: None,
+            tools: None,
+            tool_choice: None,
             extra: std::collections::HashMap::new(),
         };
         
@@ -174,6 +219,7 @@ mod tests {
             role: "user".to_string(),
             content: "Hello".to_string(),
             name: Some("John".to_string()),
+            tool_calls: None,
         };
         
         let json_str = serde_json::to_string(&msg).unwrap();
@@ -190,6 +236,7 @@ mod tests {
             role: "assistant".to_string(),
             content: "Hi there".to_string(),
             name: None,
+            tool_calls: None,
         };
         
         let json_str = serde_json::to_string(&msg).unwrap();

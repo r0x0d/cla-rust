@@ -1,6 +1,6 @@
-// Wrapper for goose binary that provides convenient 'c' command shortcuts.
-// Maps: c -h → goose --help, c -i → goose session, c "query" → goose run -t "query"
-// Unmapped subcommands pass through directly to goose.
+//! Wrapper for goose binary that provides convenient 'c' command shortcuts.
+//! Maps: c -h → goose --help, c -i → goose session, c "query" → goose run -t "query"
+//! Unmapped subcommands pass through directly to goose.
 
 mod config;
 
@@ -14,7 +14,6 @@ use fs2::FileExt;
 use anyhow::{Context, Result, bail};
 use etcetera::{choose_app_strategy, AppStrategy};
 use log::{debug, error, info, warn};
-use serde_json::json;
 use tempfile::NamedTempFile;
 
 use crate::config::GOOSE_APP_STRATEGY;
@@ -36,7 +35,6 @@ const EX_UNAVAILABLE: i32 = 69; // Service unavailable (goose not found)
 const EX_SOFTWARE: i32 = 70;    // Internal software error
 const EX_OSERR: i32 = 71;       // System error
 const EX_CANTCREAT: i32 = 73;   // Can't create output file
-const EX_CONFIG: i32 = 78;      // Configuration error
 
 /// Validates that a path points to an executable file
 fn is_executable(path: &Path) -> bool {
@@ -195,10 +193,9 @@ fn ensure_goose_config_files() -> Result<()> {
     if !config_yaml_path.exists() {
         info!("Creating config.yaml at {:?}", config_yaml_path);
         
-        let config_yaml_content = r#"OPENAI_HOST: http://127.0.0.1:8080
-OPENAI_BASE_PATH: v1/chat/completions
+        let config_yaml_content = r#"OLLAMA_HOST: 127.0.0.1:8080
 GOOSE_MODEL: default-model
-GOOSE_PROVIDER: custom_clad
+GOOSE_PROVIDER: ollama
 extensions:
   memory:
     enabled: true
@@ -216,75 +213,11 @@ extensions:
         debug!("config.yaml already exists");
     }
     
-    // Check and create clad.json
-    let clad_json_path = custom_providers_dir.join("custom_clad.json");
-    if !clad_json_path.exists() {
-        info!("Creating custom_clad.json at {:?}", clad_json_path);
-        
-        let clad_json_content = json!({
-            "name": "custom_clad",
-            "engine": "openai",
-            "display_name": "clad",
-            "description": "Command Line Assistant Daemon Proxy",
-            "api_key_env": "",
-            "base_url": "http://127.0.0.1:8080",
-            "models": [
-                {
-                    "name": "default-model",
-                    "context_limit": 128000,
-                    "input_token_cost": null,
-                    "output_token_cost": null,
-                    "currency": null,
-                    "supports_cache_control": null
-                }
-            ],
-            "headers": null,
-            "timeout_seconds": null,
-            "supports_streaming": false
-        });
-        
-        let json_string = serde_json::to_string_pretty(&clad_json_content)
-            .context("Failed to serialize clad.json")?;
-        
-        atomic_write(&clad_json_path, &json_string)
-            .context("Failed to write clad.json")?;
-    } else {
-        debug!("custom_clad.json already exists");
-    }
-    
     // Release lock (happens automatically when lock_file is dropped)
     lock_file.unlock()
         .context("Failed to release lock")?;
     
     debug!("Config files ensured successfully");
-    Ok(())
-}
-
-/// Handle deprecated commands with helpful error messages
-fn handle_deprecated_commands(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        return Ok(());
-    }
-    
-    // Check for deprecated 'shell' command
-    // if args[0] == "shell" {
-    //     eprintln!("⚠️  DEPRECATED: The 'shell' command has been removed.");
-    //     eprintln!("This command is no longer supported and will not be implemented.");
-    //     eprintln!();
-    //     eprintln!("Please use the standard 'c' command for interactive sessions:");
-    //     eprintln!("  c -i              # Start interactive session");
-    //     eprintln!("  c \"your query\"    # Run a single query");
-    //     exit(1);
-    // }
-    
-    // Check for deprecated -a flag (attach file)
-    if args[0] == "-a" || args.iter().any(|arg| arg == "-a" || arg.starts_with("--attach")) {
-        eprintln!("⚠️  DEPRECATED: The '-a' (attach file) flag is no longer supported.");
-        eprintln!();
-        eprintln!("This functionality has been replaced by MCP (Model Context Protocol).");
-        eprintln!("MCP provides more powerful file and context management capabilities.");
-    }
-    
     Ok(())
 }
 
@@ -406,14 +339,7 @@ fn main() {
         eprintln!("Error: {}", e);
         exit(EX_SOFTWARE);
     }
-    
-    // Handle deprecated commands before processing anything else
-    if let Err(e) = handle_deprecated_commands(&args) {
-        error!("Error handling deprecated commands: {}", e);
-        eprintln!("Error: {}", e);
-        exit(EX_CONFIG);
-    }
-    
+        
     // Ensure config files exist before running goose
     if let Err(e) = ensure_goose_config_files() {
         error!("Failed to ensure config files: {:#}", e);
@@ -542,6 +468,7 @@ mod tests {
     // ============================================================================
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_find_goose_with_invalid_env_var() {
         unsafe {
             // Set GOOSE_BINARY to a non-existent path
@@ -558,6 +485,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_find_goose_with_empty_env_var() {
         unsafe {
             // Set GOOSE_BINARY to empty string
@@ -576,6 +504,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    #[allow(unsafe_code)]
     fn test_find_goose_with_valid_env_var() {
         use std::os::unix::fs::PermissionsExt;
         
@@ -776,32 +705,6 @@ mod tests {
     }
 
     // ============================================================================
-    // Tests for handle_deprecated_commands
-    // ============================================================================
-
-    #[test]
-    fn test_handle_deprecated_commands_empty() {
-        let args: Vec<String> = vec![];
-        let result = handle_deprecated_commands(&args);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_handle_deprecated_commands_attach_flag() {
-        let args = vec!["-a".to_string(), "file.txt".to_string()];
-        let result = handle_deprecated_commands(&args);
-        // Should complete without error, but print warning
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_handle_deprecated_commands_attach_long_flag() {
-        let args = vec!["--attach".to_string(), "file.txt".to_string()];
-        let result = handle_deprecated_commands(&args);
-        assert!(result.is_ok());
-    }
-
-    // ============================================================================
     // Tests for atomic_write
     // ============================================================================
 
@@ -851,6 +754,7 @@ mod tests {
     // ============================================================================
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_get_filtered_env_includes_safe_vars() {
         unsafe {
             env::set_var("PATH", "/usr/bin");
@@ -869,6 +773,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_get_filtered_env_excludes_unsafe_vars() {
         unsafe {
             env::set_var("RANDOM_VAR", "should not pass");
@@ -886,6 +791,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_get_filtered_env_allows_goose_prefix() {
         unsafe {
             env::set_var("GOOSE_DEBUG", "true");
@@ -903,6 +809,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_get_filtered_env_allows_xdg_prefix() {
         unsafe {
             env::set_var("XDG_CONFIG_HOME", "/home/test/.config");
