@@ -105,3 +105,95 @@ pub struct Model {
     pub owned_by: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test ChatCompletionRequest serialization/deserialization
+    #[test]
+    fn test_chat_completion_request_serde() {
+        let request = ChatCompletionRequest {
+            model: "gpt-4".to_string(),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: "Hello".to_string(),
+                    name: None,
+                },
+            ],
+            temperature: Some(0.8),
+            top_p: None,
+            n: None,
+            stream: Some(false),
+            stop: None,
+            max_tokens: Some(1000),
+            presence_penalty: None,
+            frequency_penalty: None,
+            user: None,
+            extra: std::collections::HashMap::new(),
+        };
+        
+        // Serialize
+        let json_str = serde_json::to_string(&request).unwrap();
+        
+        // Deserialize
+        let deserialized: ChatCompletionRequest = serde_json::from_str(&json_str).unwrap();
+        
+        assert_eq!(deserialized.model, "gpt-4");
+        assert_eq!(deserialized.messages.len(), 1);
+        assert_eq!(deserialized.temperature, Some(0.8));
+        assert_eq!(deserialized.max_tokens, Some(1000));
+    }
+
+    /// Test ChatCompletionRequest with extra fields
+    #[test]
+    fn test_chat_completion_request_with_extra_fields() {
+        use serde_json::json;
+        
+        let json_data = json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "Hello"}
+            ],
+            "custom_field": "custom_value",
+            "another_field": 123
+        });
+        
+        let request: ChatCompletionRequest = serde_json::from_value(json_data).unwrap();
+        
+        assert_eq!(request.model, "gpt-4");
+        assert_eq!(request.messages.len(), 1);
+        assert!(request.extra.contains_key("custom_field"));
+        assert_eq!(request.extra.get("custom_field").unwrap().as_str(), Some("custom_value"));
+    }
+
+    /// Test Message with name field
+    #[test]
+    fn test_message_with_name() {
+        let msg = Message {
+            role: "user".to_string(),
+            content: "Hello".to_string(),
+            name: Some("John".to_string()),
+        };
+        
+        let json_str = serde_json::to_string(&msg).unwrap();
+        assert!(json_str.contains("name"));
+        
+        let deserialized: Message = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized.name, Some("John".to_string()));
+    }
+
+    /// Test Message without name field (should be omitted in JSON)
+    #[test]
+    fn test_message_without_name() {
+        let msg = Message {
+            role: "assistant".to_string(),
+            content: "Hi there".to_string(),
+            name: None,
+        };
+        
+        let json_str = serde_json::to_string(&msg).unwrap();
+        assert!(!json_str.contains("name"));
+    }
+}
+

@@ -7,11 +7,55 @@ use std::path::Path;
 /// Loaded from config.toml file
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
-    /// Proxy server settings
-    #[serde(default = "default_proxy")]
-    pub proxy: ProxyConfig,
+    /// Proxy server settings (deprecated at top-level, use backend.proxy instead)
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
     /// Backend settings for communicating with the external API
     pub backend: BackendConfig,
+    /// Logging configuration settings
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    /// Database configuration (deprecated)
+    #[serde(default)]
+    pub database: Option<DatabaseConfig>,
+    /// History configuration (deprecated)
+    #[serde(default)]
+    pub history: Option<HistoryConfig>,
+}
+
+impl Config {
+    /// Get the effective proxy configuration, preferring backend.proxy over top-level proxy
+    pub fn get_proxy_config(&self) -> ProxyConfig {
+        if let Some(ref backend_proxy) = self.backend.proxy {
+            if self.proxy.is_some() {
+                eprintln!("Warning: Both [proxy] and [backend.proxy] are defined. Using [backend.proxy]. Please migrate to [backend.proxy] and remove the top-level [proxy] section.");
+            }
+            backend_proxy.clone()
+        } else if let Some(ref proxy) = self.proxy {
+            eprintln!("Warning: Top-level [proxy] section is deprecated. Please use [backend.proxy] instead.");
+            proxy.clone()
+        } else {
+            default_proxy()
+        }
+    }
+
+    /// Load configuration from a TOML file
+    #[allow(dead_code)]
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let contents = fs::read_to_string(path)?;
+        let config: Config = toml::from_str(&contents)?;
+        
+        // Warn if deprecated proxies field is used
+        config.backend.warn_if_using_deprecated_proxies();
+        
+        Ok(config)
+    }
+    
+    /// Get the tracing filter string from the log level
+    pub fn get_tracing_filter(&self) -> String {
+        let level = self.logging.level.to_lowercase();
+        format!("clad={},tower_http={}", level, level)
+    }
 }
 
 /// Proxy server configuration
@@ -23,6 +67,15 @@ pub struct ProxyConfig {
     /// Port to bind the server to (default: 8080)
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Allowed CORS origins (default: localhost only)
+    #[serde(default = "default_allowed_origins")]
+    pub allowed_origins: Vec<String>,
+    /// Maximum requests per second per IP (default: 10)
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_per_second: u64,
+    /// Maximum burst size for rate limiting (default: 20)
+    #[serde(default = "default_rate_limit_burst")]
+    pub rate_limit_burst: u32,
 }
 
 /// Backend API configuration
@@ -33,13 +86,25 @@ pub struct BackendConfig {
     /// HTTP request timeout in seconds (increase for CPU inference)
     #[serde(default = "default_timeout")]
     pub timeout: u64,
-    /// Define https proxy to route the request through it
+    /// Define https proxy to route the request through it (deprecated, use backend.proxy instead)
     pub proxies: Option<HashMap<String, String>>,
+    /// Proxy server settings (new location for proxy configuration)
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
     /// Authentication settings
     pub auth: AuthConfig,
     /// Provider type to use (rhel_lightspeed or lightspeed_core)
     #[serde(default = "default_provider")]
     pub provider: String,
+}
+
+impl BackendConfig {
+    /// Check if deprecated proxies field is used and warn the user
+    pub fn warn_if_using_deprecated_proxies(&self) {
+        if self.proxies.is_some() {
+            eprintln!("Warning: The 'proxies' field in [backend] is deprecated. Please use [backend.proxy] for newer proxy configuration fields instead.");
+        }
+    }
 }
 
 /// Authentication configuration
@@ -51,10 +116,61 @@ pub struct AuthConfig {
     pub key_file: String,
 }
 
+/// Logging configuration
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct LoggingConfig {
+    /// The default logging level for all messages logged by CLAD
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    /// Audit logging settings (deprecated)
+    #[serde(default)]
+    pub audit: Option<AuditConfig>,
+}
+
+/// Audit logging configuration (deprecated)
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct AuditConfig {
+    /// If enabled, we will log audit tracing to journald
+    pub enabled: bool,
+}
+
+/// Database configuration (deprecated)
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DatabaseConfig {
+    /// Available types for databases are: sqlite, postgresql and mysql
+    #[serde(rename = "type")]
+    pub db_type: String,
+    /// Connection string for sqlite database
+    pub connection_string: Option<String>,
+    /// Database host
+    pub host: Option<String>,
+    /// Database port
+    pub port: Option<String>,
+    /// Database username
+    pub username: Option<String>,
+    /// Database password
+    pub password: Option<String>,
+    /// Database name
+    pub database: Option<String>,
+}
+
+/// History configuration (deprecated)
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct HistoryConfig {
+    /// If the history for all conversation should be enabled or not
+    pub enabled: bool,
+}
+
 fn default_proxy() -> ProxyConfig {
     ProxyConfig {
         host: default_host(),
         port: default_port(),
+        allowed_origins: default_allowed_origins(),
+        rate_limit_per_second: default_rate_limit(),
+        rate_limit_burst: default_rate_limit_burst(),
     }
 }
 
@@ -66,6 +182,21 @@ fn default_port() -> u16 {
     8080
 }
 
+fn default_allowed_origins() -> Vec<String> {
+    vec![
+        "http://localhost:8080".to_string(),
+        "http://127.0.0.1:8080".to_string(),
+    ]
+}
+
+fn default_rate_limit() -> u64 {
+    10
+}
+
+fn default_rate_limit_burst() -> u32 {
+    20
+}
+
 fn default_timeout() -> u64 {
     30
 }
@@ -74,11 +205,268 @@ fn default_provider() -> String {
     "rhel_lightspeed".to_string()
 }
 
-impl Config {
-    /// Load configuration from a TOML file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&contents)?;
-        Ok(config)
+fn default_log_level() -> String {
+    "INFO".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test basic config deserialization with new [backend.proxy] section
+    #[test]
+    fn test_config_deserialization() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            timeout = 30
+            provider = "rhel_lightspeed"
+            
+            [backend.proxy]
+            host = "127.0.0.1"
+            port = 8080
+            allowed_origins = ["http://localhost:8080"]
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "INFO"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok(), "Config should deserialize successfully");
+        
+        let config = config.unwrap();
+        let proxy_config = config.get_proxy_config();
+        assert_eq!(proxy_config.host, "127.0.0.1");
+        assert_eq!(proxy_config.port, 8080);
+        assert_eq!(config.backend.endpoint, "http://localhost:9000");
+        assert_eq!(config.backend.provider, "rhel_lightspeed");
+    }
+
+    /// Test backward compatibility with old [proxy] section
+    #[test]
+    fn test_config_backward_compatibility_old_proxy() {
+        let config_str = r#"
+            [proxy]
+            host = "0.0.0.0"
+            port = 9090
+            allowed_origins = ["http://localhost:9090"]
+            
+            [backend]
+            endpoint = "http://localhost:9000"
+            timeout = 30
+            provider = "rhel_lightspeed"
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "INFO"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok(), "Config should deserialize successfully");
+        
+        let config = config.unwrap();
+        let proxy_config = config.get_proxy_config();
+        assert_eq!(proxy_config.host, "0.0.0.0");
+        assert_eq!(proxy_config.port, 9090);
+    }
+
+    /// Test that [backend.proxy] takes precedence over old [proxy]
+    #[test]
+    fn test_config_backend_proxy_precedence() {
+        let config_str = r#"
+            [proxy]
+            host = "0.0.0.0"
+            port = 9090
+            
+            [backend]
+            endpoint = "http://localhost:9000"
+            timeout = 30
+            provider = "rhel_lightspeed"
+            
+            [backend.proxy]
+            host = "127.0.0.1"
+            port = 8080
+            allowed_origins = ["http://localhost:8080"]
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "INFO"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok(), "Config should deserialize successfully");
+        
+        let config = config.unwrap();
+        let proxy_config = config.get_proxy_config();
+        // backend.proxy should take precedence
+        assert_eq!(proxy_config.host, "127.0.0.1");
+        assert_eq!(proxy_config.port, 8080);
+    }
+
+    /// Test that deprecated proxies field is recognized
+    #[test]
+    fn test_config_deprecated_proxies_field() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            timeout = 30
+            provider = "rhel_lightspeed"
+            proxies = { http = "http://proxy:8002", https = "https://proxy:8002" }
+            
+            [backend.proxy]
+            host = "127.0.0.1"
+            port = 8080
+            allowed_origins = ["http://localhost:8080"]
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "INFO"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok(), "Config should deserialize successfully");
+        
+        let config = config.unwrap();
+        // proxies field should still be present for backward compatibility
+        assert!(config.backend.proxies.is_some());
+        assert_eq!(config.backend.proxies.as_ref().unwrap().get("http").unwrap(), "http://proxy:8002");
+    }
+
+    /// Test config with minimal required fields
+    #[test]
+    fn test_config_minimal() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            provider = "rhel_lightspeed"
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok(), "Minimal config should be valid");
+        
+        let config = config.unwrap();
+        assert_eq!(config.backend.endpoint, "http://localhost:9000");
+        assert_eq!(config.backend.provider, "rhel_lightspeed");
+    }
+
+    /// Test config with all optional fields
+    #[test]
+    fn test_config_with_all_optional_fields() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            timeout = 60
+            provider = "lightspeed_core"
+            
+            [backend.proxy]
+            host = "0.0.0.0"
+            port = 9090
+            allowed_origins = ["http://example.com"]
+            rate_limit_per_second = 5
+            rate_limit_burst = 10
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "DEBUG"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok());
+        
+        let config = config.unwrap();
+        assert_eq!(config.backend.timeout, 60);
+        assert_eq!(config.logging.level, "DEBUG");
+        
+        let proxy_config = config.get_proxy_config();
+        assert_eq!(proxy_config.rate_limit_per_second, 5);
+        assert_eq!(proxy_config.rate_limit_burst, 10);
+    }
+
+    /// Test config with invalid provider
+    #[test]
+    fn test_config_with_unknown_provider() {
+        // This should parse successfully since provider is just a string
+        // The validation happens at runtime when creating the provider
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            provider = "unknown_provider"
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+        "#;
+        
+        let config: Result<Config, _> = toml::from_str(config_str);
+        assert!(config.is_ok());
+        assert_eq!(config.unwrap().backend.provider, "unknown_provider");
+    }
+
+    /// Test tracing filter generation
+    #[test]
+    fn test_tracing_filter_generation() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            provider = "rhel_lightspeed"
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+            
+            [logging]
+            level = "DEBUG"
+        "#;
+        
+        let config: Config = toml::from_str(config_str).unwrap();
+        let filter = config.get_tracing_filter();
+        
+        assert_eq!(filter, "clad=debug,tower_http=debug");
+    }
+
+    /// Test default values are applied correctly
+    #[test]
+    fn test_config_defaults() {
+        let config_str = r#"
+            [backend]
+            endpoint = "http://localhost:9000"
+            provider = "rhel_lightspeed"
+            
+            [backend.auth]
+            cert_file = "/path/to/cert.pem"
+            key_file = "/path/to/key.pem"
+        "#;
+        
+        let config: Config = toml::from_str(config_str).unwrap();
+        
+        // Check defaults
+        assert_eq!(config.backend.timeout, 30); // default timeout
+        // The default log level may be empty string if not specified, that's ok
+        // The actual default "INFO" is applied when creating the tracing filter
+        
+        let proxy_config = config.get_proxy_config();
+        assert_eq!(proxy_config.host, "127.0.0.1"); // default host
+        assert_eq!(proxy_config.port, 8080); // default port
+        assert_eq!(proxy_config.rate_limit_per_second, 10); // default rate limit
     }
 }

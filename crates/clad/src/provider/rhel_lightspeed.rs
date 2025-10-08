@@ -131,3 +131,224 @@ impl Provider for RhelLightspeedProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use crate::openai::{ChatCompletionRequest, Message};
+
+    /// Test RHEL Lightspeed request transformation
+    #[test]
+    fn test_rhel_lightspeed_transform_request() {
+        let provider = RhelLightspeedProvider::new();
+        let request = ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: "What is Rust?".to_string(),
+                    name: None,
+                },
+            ],
+            temperature: None,
+            top_p: None,
+            n: None,
+            stream: None,
+            stop: None,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            user: None,
+            extra: std::collections::HashMap::new(),
+        };
+        
+        let backend_request = provider.transform_request(&request);
+        
+        // Should have a "question" field
+        assert!(backend_request.get("question").is_some());
+        assert_eq!(
+            backend_request.get("question").and_then(|v| v.as_str()),
+            Some("What is Rust?")
+        );
+    }
+
+    /// Test RHEL Lightspeed request transformation with multiple messages
+    #[test]
+    fn test_rhel_lightspeed_transform_request_multiple_messages() {
+        let provider = RhelLightspeedProvider::new();
+        let request = ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: "You are a helpful assistant.".to_string(),
+                    name: None,
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: "What is Linux?".to_string(),
+                    name: None,
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: "Linux is an operating system.".to_string(),
+                    name: None,
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: "Tell me more about kernels.".to_string(),
+                    name: None,
+                },
+            ],
+            temperature: None,
+            top_p: None,
+            n: None,
+            stream: None,
+            stop: None,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            user: None,
+            extra: std::collections::HashMap::new(),
+        };
+        
+        let backend_request = provider.transform_request(&request);
+        
+        // Should extract the last user message
+        assert_eq!(
+            backend_request.get("question").and_then(|v| v.as_str()),
+            Some("Tell me more about kernels.")
+        );
+    }
+
+    /// Test RHEL Lightspeed request transformation with only system message
+    #[test]
+    fn test_rhel_lightspeed_transform_request_no_user_message() {
+        let provider = RhelLightspeedProvider::new();
+        let request = ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: vec![
+                Message {
+                    role: "system".to_string(),
+                    content: "You are a helpful assistant.".to_string(),
+                    name: None,
+                },
+            ],
+            temperature: None,
+            top_p: None,
+            n: None,
+            stream: None,
+            stop: None,
+            max_tokens: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            user: None,
+            extra: std::collections::HashMap::new(),
+        };
+        
+        let backend_request = provider.transform_request(&request);
+        
+        // Should handle empty user message gracefully
+        assert_eq!(
+            backend_request.get("question").and_then(|v| v.as_str()),
+            Some("")
+        );
+    }
+
+    /// Test RHEL Lightspeed response transformation with valid backend response
+    #[test]
+    fn test_rhel_lightspeed_transform_response_valid() {
+        let provider = RhelLightspeedProvider::new();
+        let backend_response = json!({
+            "data": {
+                "text": "This is the assistant's response"
+            }
+        });
+        
+        let result = provider.transform_response(&backend_response, "test-model");
+        
+        assert!(result.is_ok(), "Transform should succeed");
+        let response = result.unwrap();
+        assert_eq!(response.model, "test-model");
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(response.choices[0].message.role, "assistant");
+        assert_eq!(response.choices[0].message.content, "This is the assistant's response");
+        assert_eq!(response.choices[0].finish_reason, Some("stop".to_string()));
+    }
+
+    /// Test RHEL Lightspeed response transformation with usage data
+    #[test]
+    fn test_rhel_lightspeed_transform_response_with_usage() {
+        let provider = RhelLightspeedProvider::new();
+        let backend_response = json!({
+            "data": {
+                "text": "Response text"
+            },
+            "usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 30,
+                "total_tokens": 80
+            }
+        });
+        
+        let result = provider.transform_response(&backend_response, "test-model");
+        
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.usage.prompt_tokens, 50);
+        assert_eq!(response.usage.completion_tokens, 30);
+        assert_eq!(response.usage.total_tokens, 80);
+    }
+
+    /// Test RHEL Lightspeed response transformation with missing text field (error case)
+    #[test]
+    fn test_rhel_lightspeed_transform_response_missing_text() {
+        let provider = RhelLightspeedProvider::new();
+        
+        // Missing "text" field
+        let backend_response = json!({
+            "data": {}
+        });
+        
+        let result = provider.transform_response(&backend_response, "test-model");
+        assert!(result.is_err(), "Should fail when text field is missing");
+        
+        // Missing "data" field entirely
+        let backend_response = json!({
+            "error": "something went wrong"
+        });
+        
+        let result = provider.transform_response(&backend_response, "test-model");
+        assert!(result.is_err(), "Should fail when data field is missing");
+    }
+
+    /// Test RHEL Lightspeed streaming text extraction
+    #[test]
+    fn test_rhel_lightspeed_extract_streaming_text() {
+        let provider = RhelLightspeedProvider::new();
+        let backend_response = json!({
+            "data": {
+                "text": "Streaming response content"
+            }
+        });
+        
+        let result = provider.extract_streaming_text(&backend_response);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Streaming response content");
+    }
+
+    /// Test RHEL Lightspeed streaming text extraction failure
+    #[test]
+    fn test_rhel_lightspeed_extract_streaming_text_error() {
+        let provider = RhelLightspeedProvider::new();
+        let backend_response = json!({
+            "data": {
+                "wrong_field": "value"
+            }
+        });
+        
+        let result = provider.extract_streaming_text(&backend_response);
+        assert!(result.is_err(), "Should fail when text field is missing");
+    }
+}
+

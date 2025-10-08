@@ -11,9 +11,36 @@ pub mod common {
     use std::fs;
     use crate::config::Config;
 
+    /// Validate certificate file permissions (Unix-only)
+    #[cfg(unix)]
+    fn validate_cert_permissions(path: &str, file_type: &str) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt;
+        
+        let metadata = fs::metadata(path)
+            .map_err(|e| format!("Failed to read {} file metadata {}: {}", file_type, path, e))?;
+        
+        let permissions = metadata.permissions();
+        let mode = permissions.mode();
+        
+        // Warn if file is readable by group or others (mode & 0o077)
+        if mode & 0o077 != 0 {
+            tracing::warn!(
+                "Warning: {} file {} has overly permissive permissions ({:o}). \
+                 Should be 0600 or more restrictive for security.",
+                file_type, path, mode & 0o777
+            );
+        }
+        
+        Ok(())
+    }
+    
     /// Create an HTTP client with certificate-based authentication
     /// This is shared by all providers that need certificate authentication
     pub fn create_authenticated_client(config: &Config) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
+        // Validate certificate file permissions before reading
+        validate_cert_permissions(&config.backend.auth.cert_file, "certificate")?;
+        validate_cert_permissions(&config.backend.auth.key_file, "key")?;
+        
         // Read certificate and key files
         let cert_pem = fs::read(&config.backend.auth.cert_file)
             .map_err(|e| format!("Failed to read cert file {}: {}", config.backend.auth.cert_file, e))?;
@@ -41,14 +68,9 @@ pub mod common {
         Ok(client_builder.build()?)
     }
 
-    /// Helper: Generate a simple UUID-like identifier
+    /// Helper: Generate a cryptographically secure UUID
     pub fn uuid_simple() -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        format!("{:x}", now)
+        uuid::Uuid::new_v4().to_string()
     }
 
     /// Helper: Get current Unix timestamp
@@ -56,7 +78,7 @@ pub mod common {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("System time before UNIX epoch")
             .as_secs() as i64
     }
 }
@@ -95,10 +117,12 @@ pub trait Provider: Send + Sync {
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
+            // Log detailed error internally
             tracing::error!("Backend returned error {}: {}", status, error_body);
+            // Return sanitized error to client
             return Err(AppError::BackendError(format!(
-                "Backend returned status {}: {}",
-                status, error_body
+                "Backend returned status {}",
+                status
             )));
         }
 
@@ -131,4 +155,72 @@ pub trait Provider: Send + Sync {
 
 pub mod rhel_lightspeed;
 pub mod lightspeed_core;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============================================================================
+    // Tests for common utility functions
+    // ============================================================================
+
+    #[test]
+    fn test_uuid_simple_generates_valid_uuid() {
+        let uuid = common::uuid_simple();
+        
+        // UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+        assert_eq!(uuid.len(), 36, "UUID should be 36 characters");
+        assert_eq!(uuid.chars().filter(|&c| c == '-').count(), 4, "UUID should have 4 dashes");
+        
+        // Check that it's a valid UUID format
+        assert!(uuid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'), "UUID should only contain hex digits and dashes");
+    }
+
+    #[test]
+    fn test_uuid_simple_generates_unique_uuids() {
+        let uuid1 = common::uuid_simple();
+        let uuid2 = common::uuid_simple();
+        let uuid3 = common::uuid_simple();
+        
+        assert_ne!(uuid1, uuid2, "UUIDs should be unique");
+        assert_ne!(uuid2, uuid3, "UUIDs should be unique");
+        assert_ne!(uuid1, uuid3, "UUIDs should be unique");
+    }
+
+    #[test]
+    fn test_current_timestamp_returns_positive() {
+        let timestamp = common::current_timestamp();
+        assert!(timestamp > 0, "Timestamp should be positive");
+    }
+
+    #[test]
+    fn test_current_timestamp_is_recent() {
+        let timestamp = common::current_timestamp();
+        
+        // Should be after 2020-01-01 (1577836800)
+        assert!(timestamp > 1577836800, "Timestamp should be after 2020");
+        
+        // Should be before 2050-01-01 (2524608000)
+        assert!(timestamp < 2524608000, "Timestamp should be before 2050");
+    }
+
+    #[test]
+    fn test_current_timestamp_is_monotonic() {
+        let ts1 = common::current_timestamp();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let ts2 = common::current_timestamp();
+        
+        assert!(ts2 >= ts1, "Timestamps should be monotonically increasing");
+    }
+
+    #[test]
+    fn test_current_timestamp_precision() {
+        let ts1 = common::current_timestamp();
+        let ts2 = common::current_timestamp();
+        
+        // Timestamps should be in seconds, so rapid calls might return the same value
+        // or differ by at most a few seconds
+        assert!((ts2 - ts1) < 2, "Rapid timestamp calls should be close");
+    }
+}
 
