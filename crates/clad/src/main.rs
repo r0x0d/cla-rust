@@ -38,43 +38,39 @@ mod config;
 mod state;
 mod proxy;
 mod openai;
+mod provider;
 
 use axum::{routing::{get, post}, Router};
 use std::{path::Path, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::{config::Config, proxy::{chat_completions_handler, models_handler}, state::AppState};
+use crate::{
+    config::Config,
+    proxy::{chat_completions_handler, models_handler},
+    state::AppState,
+    provider::{
+        common::create_authenticated_client,
+        rhel_lightspeed::RhelLightspeedProvider,
+        lightspeed_core::LightspeedCoreProvider,
+    },
+};
 
-/// Create an HTTP client with certificate-based authentication
-fn create_authenticated_client(config: &Config) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
-    use std::fs;
-    
-    // Read certificate and key files
-    let cert_pem = fs::read(&config.backend.auth.cert_file)
-        .map_err(|e| format!("Failed to read cert file {}: {}", config.backend.auth.cert_file, e))?;
-    let key_pem = fs::read(&config.backend.auth.key_file)
-        .map_err(|e| format!("Failed to read key file {}: {}", config.backend.auth.key_file, e))?;
-    
-    // Create identity from certificate and key (PEM format)
-    let identity = reqwest::Identity::from_pkcs8_pem(&cert_pem, &key_pem)?;
-    
-    // Build client with identity and optional proxy settings
-    let mut client_builder = reqwest::Client::builder()
-        .identity(identity)
-        .timeout(std::time::Duration::from_secs(config.backend.timeout));
-    
-    // Add proxy configuration if specified
-    if let Some(proxies) = &config.backend.proxies {
-        if let Some(http_proxy) = proxies.get("http") {
-            client_builder = client_builder.proxy(reqwest::Proxy::http(http_proxy)?);
+/// Create a provider based on the configuration
+fn create_provider(config: &Config) -> Result<Arc<dyn crate::provider::Provider>, Box<dyn std::error::Error>> {
+    match config.backend.provider.as_str() {
+        "rhel_lightspeed" => {
+            info!("Using RHEL Lightspeed provider");
+            Ok(Arc::new(RhelLightspeedProvider::new()))
         }
-        if let Some(https_proxy) = proxies.get("https") {
-            client_builder = client_builder.proxy(reqwest::Proxy::https(https_proxy)?);
+        "lightspeed_core" => {
+            info!("Using Lightspeed Core provider");
+            Ok(Arc::new(LightspeedCoreProvider::new()))
+        }
+        unknown => {
+            Err(format!("Unknown provider: {}. Valid options are: rhel_lightspeed, lightspeed_core", unknown).into())
         }
     }
-    
-    Ok(client_builder.build()?)
 }
 
 /// Main entry point for the proxy server
@@ -108,10 +104,18 @@ async fn main() {
             std::process::exit(1);
         });
 
+    // Create provider based on configuration
+    let provider = create_provider(&config)
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to create provider: {}", e);
+            std::process::exit(1);
+        });
+
     // Create shared state
     let state = AppState {
         config: Arc::new(config.clone()),
         client,
+        provider,
     };
 
     // Setup CORS to allow Goose to connect

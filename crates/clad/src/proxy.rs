@@ -14,7 +14,8 @@ use tracing::{debug, error, info};
 // Update this import to match your actual module structure.
 // If you don't have an openai.rs file, create one in src/ and define the required structs there.
 use crate::state::AppState;
-use crate::openai::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Choice, ChunkChoice, Delta, Message, Model, ModelsResponse, Usage};
+use crate::openai::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChunkChoice, Delta, Model, ModelsResponse};
+use crate::provider::common::{uuid_simple, current_timestamp};
 
 /// Handler for /v1/chat/completions endpoint
 /// This receives OpenAI-compatible requests from Goose
@@ -42,50 +43,15 @@ async fn handle_non_streaming_request(
     state: AppState,
     request: ChatCompletionRequest,
 ) -> Result<Json<ChatCompletionResponse>, AppError> {
-    // Transform OpenAI request to your external backend format
-    // CUSTOMIZE THIS: Modify based on your backend's API specification
-    let backend_request = transform_to_backend_format(&request);
-
-    println!("Backend request: {:?}", backend_request);
-    // Forward request to external backend
-    let backend_req = state
-        .client
-        .post(&state.config.backend.endpoint)
-        .json(&backend_request);
-
-    let response = backend_req
-        .send()
-        .await
-        .map_err(|e| {
-            error!("Failed to send request to backend: {}", e);
-            AppError::BackendError(e.to_string())
-        })?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_body = response.text().await.unwrap_or_default();
-        error!("Backend returned error {}: {}", status, error_body);
-        return Err(AppError::BackendError(format!(
-            "Backend returned status {}: {}",
-            status, error_body
-        )));
-    }
-
-    // Parse backend response
-    let backend_response: Value = response
-        .json()
-        .await
-        .map_err(|e| {
-            error!("Failed to parse backend response: {}", e);
-            AppError::BackendError(e.to_string())
-        })?;
-
-    // Transform backend response to OpenAI format
-    // CUSTOMIZE THIS: Modify based on your backend's response format
-    let openai_response = transform_to_openai_format(&backend_response, &request.model)?;
+    // Use the provider's handle_request method
+    let response = state.provider.handle_request(
+        &state.client,
+        state.config.clone(),
+        request,
+    ).await?;
 
     info!("Successfully processed non-streaming request");
-    Ok(Json(openai_response))
+    Ok(Json(response))
 }
 
 /// Handle streaming chat completion request
@@ -93,8 +59,8 @@ async fn handle_streaming_request(
     state: AppState,
     request: ChatCompletionRequest,
 ) -> Result<Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>, AppError> {
-    // Transform OpenAI request to backend format
-    let backend_request = transform_to_backend_format(&request);
+    // Transform OpenAI request to backend format using the provider
+    let backend_request = state.provider.transform_request(&request);
 
     // Forward request to external backend
     let backend_req = state
@@ -131,16 +97,8 @@ async fn handle_streaming_request(
 
     debug!("Backend response for streaming: {:?}", backend_response);
 
-    // Extract the reply from the backend
-    let generated_text = backend_response
-        .get("text")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::TransformError(format!(
-                "Could not extract reply from backend response for streaming"
-            ))
-        })?
-        .to_string();
+    // Extract the reply from the backend using the provider
+    let generated_text = state.provider.extract_streaming_text(&backend_response)?;
 
     // Create streaming chunks
     let stream = create_streaming_chunks(generated_text, request.model);
@@ -246,123 +204,6 @@ pub async fn models_handler(State(_state): State<AppState>) -> Json<ModelsRespon
     })
 }
 
-/// Transform OpenAI request to command-line-assistant backend format
-/// Based on: https://github.com/rhel-lightspeed/command-line-assistant/blob/main/command_line_assistant/dbus/interfaces/chat.py
-pub(crate) fn transform_to_backend_format(openai_req: &ChatCompletionRequest) -> Value {
-    // The command-line-assistant backend expects:
-    // {
-    //   "message": "user's current message",
-    //   "context": [...previous messages for context...]
-    // }
-    
-    // Extract the last user message (most recent)
-    let user_message = openai_req
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.content.as_str())
-        .unwrap_or("");
-    
-    // Build context from previous messages (excluding the last user message)
-    // Not being used right now. Probably we will replace this with MCP calls.
-    let context: Vec<Value> = openai_req
-        .messages
-        .iter()
-        .filter_map(|m| {
-            // Include all messages for context
-            Some(json!({
-                "role": m.role,
-                "content": m.content
-            }))
-        })
-        .collect();
-    
-    json!({
-        "question": user_message,
-        //"context": context
-    })
-}
-
-/// Transform command-line-assistant backend response to OpenAI format
-/// Based on: https://github.com/rhel-lightspeed/command-line-assistant/blob/main/command_line_assistant/dbus/interfaces/chat.py
-pub(crate) fn transform_to_openai_format(
-    backend_resp: &Value,
-    model: &str,
-) -> Result<ChatCompletionResponse, AppError> {
-    // The command-line-assistant backend returns:
-    // {
-    //   "reply": "assistant's response text",
-    //   ... possibly other fields ...
-    // }
-    
-    // Extract the "reply" field from the backend response
-    let generated_text = backend_resp
-        .get("data")
-        .and_then(|v| v.get("text"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::TransformError(format!(
-                "Could not extract 'reply' field from backend response. Response: {:?}",
-                backend_resp
-            ))
-        })?;
-
-    // Extract token usage if available
-    let (prompt_tokens, completion_tokens, total_tokens) = if let Some(usage) = backend_resp.get("usage") {
-        (
-            usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            usage.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        )
-    } else {
-        // Estimate token counts if not provided
-        let estimated_prompt = 0;
-        let estimated_completion = (generated_text.len() / 4) as u32;
-        (estimated_prompt, estimated_completion, estimated_prompt + estimated_completion)
-    };
-
-    // Build OpenAI-compatible response
-    Ok(ChatCompletionResponse {
-        id: format!("chatcmpl-{}", uuid_simple()),
-        object: "chat.completion".to_string(),
-        created: current_timestamp(),
-        model: model.to_string(),
-        choices: vec![Choice {
-            index: 0,
-            message: Message {
-                role: "assistant".to_string(),
-                content: generated_text.to_string(),
-                name: None,
-            },
-            finish_reason: Some("stop".to_string()),
-        }],
-        usage: Usage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-        },
-    })
-}
-
-/// Helper: Generate a simple UUID-like identifier
-fn uuid_simple() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{:x}", now)
-}
-
-/// Helper: Get current Unix timestamp
-fn current_timestamp() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
-}
 
 /// Error types for the proxy
 #[derive(Debug)]

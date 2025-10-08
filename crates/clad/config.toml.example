@@ -17,6 +17,10 @@ timeout = 30
 # Define https proxy to route the request through it.
 # proxies = { http = "http://example-host:8002", https = "https://example-host:8002" }
 # The proxy also accepts `username:password@localhost:8002` as it's input
+# Provider to use: "rhel_lightspeed" or "lightspeed_core"
+# rhel_lightspeed: Uses custom transformation for RHEL Lightspeed backend
+# lightspeed_core: Pass-through provider for OpenAI-compatible backends
+provider = "rhel_lightspeed"
 
 # Configure authentication settings for backend
 [backend.auth]
