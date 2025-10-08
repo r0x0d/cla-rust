@@ -9,7 +9,7 @@ jobs:
   # Build RPMs for each pull request
   - job: copr_build
     trigger: pull_request
-    owner: "@r0x0d"
+    owner: "@rolivier"
     project: cla-rust
     targets:
       - epel-9-x86_64
@@ -29,7 +29,7 @@ jobs:
   - job: copr_build
     trigger: commit
     branch: main
-    owner: "@r0x0d"
+    owner: "@rolivier"
     project: cla-rust
     targets:
       - epel-9-x86_64
