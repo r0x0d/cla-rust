@@ -37,6 +37,9 @@ pub struct BackendConfig {
     pub proxies: Option<HashMap<String, String>>,
     /// Authentication settings
     pub auth: AuthConfig,
+    /// Provider type to use (rhel_lightspeed or lightspeed_core)
+    #[serde(default = "default_provider")]
+    pub provider: String,
 }
 
 /// Authentication configuration
@@ -65,6 +68,10 @@ fn default_port() -> u16 {
 
 fn default_timeout() -> u64 {
     30
+}
+
+fn default_provider() -> String {
+    "rhel_lightspeed".to_string()
 }
 
 impl Config {
