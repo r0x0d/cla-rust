@@ -21,7 +21,6 @@ pub struct Config {
 }
 
 impl Config {
-
     /// Load configuration from a TOML file
     #[allow(dead_code)]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
