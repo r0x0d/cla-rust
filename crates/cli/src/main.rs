@@ -10,6 +10,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
+use clap::Parser;
 use fs2::FileExt;
 use anyhow::{Context, Result, bail};
 use etcetera::{choose_app_strategy, AppStrategy};
@@ -35,6 +36,37 @@ const EX_UNAVAILABLE: i32 = 69; // Service unavailable (goose not found)
 const EX_SOFTWARE: i32 = 70;    // Internal software error
 const EX_OSERR: i32 = 71;       // System error
 const EX_CANTCREAT: i32 = 73;   // Can't create output file
+
+/// Command Line Assistant (c) - Your Quick AI Helper
+#[derive(Parser, Debug)]
+#[command(
+    name = "c",
+    author,
+    version,
+    about = "Command Line Assistant (c) - Your Quick AI Helper",
+    long_about = "The 'c' command provides a simplified interface for quick AI assistance.\n\
+                  Simply type your question or request as natural text after 'c'.\n\n\
+                  Interactive Mode:\n  \
+                    Use 'c -i' to start a continuous conversation session where you can\n  \
+                    ask multiple questions and get detailed assistance.\n\n\
+                  Quick Queries:\n  \
+                    Use 'c \"your question\"' for one-off questions. The AI will provide\n  \
+                    a response and exit.",
+    after_help = "EXAMPLES:\n    \
+                  c -i                    # Start interactive session\n    \
+                  c \"how do I list files\" # Ask a quick question\n    \
+                  c explain this code     # Multi-word queries work naturally",
+    disable_help_subcommand = true,
+)]
+struct Cli {
+    /// Start an interactive session
+    #[arg(short, long, conflicts_with = "query")]
+    interactive: bool,
+
+    /// Your question or query (everything after 'c' that isn't a flag)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = false)]
+    query: Vec<String>,
+}
 
 /// Validates that a path points to an executable file
 fn is_executable(path: &Path) -> bool {
@@ -100,43 +132,6 @@ fn find_goose() -> Result<PathBuf> {
 /// Check if an argument is a known goose subcommand
 fn is_goose_subcommand(arg: &str) -> bool {
     GOOSE_SUBCOMMANDS.contains(&arg)
-}
-
-/// Display a custom help message for the 'c' command
-fn print_help() {
-    println!(r#"
-Command Line Assistant (c) - Your Quick AI Helper
-
-USAGE:
-    c [OPTIONS] [QUERY...]
-
-OPTIONS:
-    -h, --help              Show this help message
-    -i, --interactive       Start an interactive session
-
-EXAMPLES:
-    c -h                    # Show this help
-    c -i                    # Start interactive session
-    c "how do I list files" # Ask a quick question
-    c explain this code     # Multi-word queries work naturally
-
-DESCRIPTION:
-    The 'c' command provides a simplified interface for quick AI assistance.
-    Simply type your question or request as natural text after 'c'.
-
-    Interactive Mode:
-      Use 'c -i' to start a continuous conversation session where you can
-      ask multiple questions and get detailed assistance.
-
-    Quick Queries:
-      Use 'c "your question"' for one-off questions. The AI will provide
-      a response and exit.
-
-NOTES:
-    - Queries are automatically processed as natural language
-    - No special formatting needed - just type naturally
-    - For complex tasks, use interactive mode (-i)
-"#);
 }
 
 /// Validate command-line arguments for security and resource limits
@@ -259,23 +254,23 @@ extensions:
 }
 
 /// Build the argument vector for the goose command
-fn build_goose_args(args: &[String]) -> Vec<String> {
-    // Note: args validation and help/subcommand checking happens in main()
-    // This function only handles -i flag and query building
+fn build_goose_args(cli: &Cli) -> Vec<String> {
+    // Note: args validation and subcommand checking happens in main()
+    // This function only handles interactive flag and query building
     
-    if args[0] == "-i" || args[0] == "--interactive" {
+    if cli.interactive {
         // Interactive mode
         debug!("Interactive mode requested");
         return vec!["session".to_string()];
     }
     
     // Treat as query text - Pass each argument separately
-    debug!("Treating as query with {} arguments", args.len());
+    debug!("Treating as query with {} arguments", cli.query.len());
     let mut cmd = vec!["run".to_string(), "-t".to_string()];
     
     // SECURITY: Don't join arguments - pass them separately
     // The goose binary will handle them appropriately
-    cmd.extend_from_slice(args);
+    cmd.extend_from_slice(&cli.query);
     cmd
 }
 
@@ -351,27 +346,27 @@ fn main() {
     
     info!("Command Line Assistant CLI starting");
     
-    // Get args first to check for deprecated commands
-    let args: Vec<String> = env::args().skip(1).collect();
-    debug!("Received {} arguments", args.len());
+    // Parse command-line arguments using clap
+    let cli = Cli::parse();
+    debug!("Parsed CLI arguments: {:?}", cli);
     
-    // Check if help is requested or no args provided
-    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
-        print_help();
-        exit(0);
-    }
-    
-    // Check if first argument is a restricted goose subcommand
-    if !args.is_empty() && is_goose_subcommand(&args[0]) {
+    // Check if first query argument is a restricted goose subcommand
+    if !cli.interactive && !cli.query.is_empty() && is_goose_subcommand(&cli.query[0]) {
         eprintln!("Error: Direct goose subcommands are not available.");
         eprintln!("Please use the simplified interface instead.");
-        eprintln!();
-        print_help();
+        eprintln!("\nRun 'c --help' for usage information.");
+        exit(1);
+    }
+    
+    // If no interactive flag and no query, show error (clap doesn't handle this case for us)
+    if !cli.interactive && cli.query.is_empty() {
+        eprintln!("Error: You must either provide a query or use the -i/--interactive flag.");
+        eprintln!("\nRun 'c --help' for usage information.");
         exit(1);
     }
     
     // Validate arguments
-    if let Err(e) = validate_args(&args) {
+    if let Err(e) = validate_args(&cli.query) {
         error!("Invalid arguments: {}", e);
         eprintln!("Error: {}", e);
         exit(EX_SOFTWARE);
@@ -400,7 +395,7 @@ fn main() {
     info!("Using goose binary: {:?}", goose);
     
     // Build command arguments
-    let goose_args = build_goose_args(&args);
+    let goose_args = build_goose_args(&cli);
     debug!("Goose arguments: {:?}", goose_args);
     
     // Filter environment variables for security
@@ -668,19 +663,21 @@ mod tests {
 
     #[test]
     fn test_build_goose_args_interactive() {
-        let args = vec!["-i".to_string()];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["session".to_string()]);
-        
-        let args = vec!["--interactive".to_string()];
-        let result = build_goose_args(&args);
+        let cli = Cli {
+            interactive: true,
+            query: vec![],
+        };
+        let result = build_goose_args(&cli);
         assert_eq!(result, vec!["session".to_string()]);
     }
 
     #[test]
     fn test_build_goose_args_query() {
-        let args = vec!["what".to_string(), "is".to_string(), "rust".to_string()];
-        let result = build_goose_args(&args);
+        let cli = Cli {
+            interactive: false,
+            query: vec!["what".to_string(), "is".to_string(), "rust".to_string()],
+        };
+        let result = build_goose_args(&cli);
         
         // Should be: ["run", "-t", "what", "is", "rust"]
         assert_eq!(result[0], "run");
@@ -692,8 +689,11 @@ mod tests {
 
     #[test]
     fn test_build_goose_args_query_with_special_chars() {
-        let args = vec!["query with spaces".to_string(), "and!special#chars".to_string()];
-        let result = build_goose_args(&args);
+        let cli = Cli {
+            interactive: false,
+            query: vec!["query with spaces".to_string(), "and!special#chars".to_string()],
+        };
+        let result = build_goose_args(&cli);
         
         assert_eq!(result[0], "run");
         assert_eq!(result[1], "-t");
@@ -704,8 +704,11 @@ mod tests {
     #[test]
     fn test_build_goose_args_preserves_arg_boundaries() {
         // Critical security test: ensure arguments are passed separately
-        let args = vec!["arg1".to_string(), "arg2".to_string(), "arg3".to_string()];
-        let result = build_goose_args(&args);
+        let cli = Cli {
+            interactive: false,
+            query: vec!["arg1".to_string(), "arg2".to_string(), "arg3".to_string()],
+        };
+        let result = build_goose_args(&cli);
         
         // Should be: ["run", "-t", "arg1", "arg2", "arg3"]
         assert_eq!(result.len(), 5);
