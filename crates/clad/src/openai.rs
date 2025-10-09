@@ -5,28 +5,41 @@ use serde_json::Value;
 /// This matches what Goose will send
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
+    /// Model ID
     pub model: String,
+    /// List of messages
     pub messages: Vec<Message>,
+    /// Temperature
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Top P
     #[serde(default)]
     pub top_p: Option<f32>,
+    /// Number of completions
     #[serde(default)]
     pub n: Option<u32>,
+    /// Stream
     #[serde(default)]
     pub stream: Option<bool>,
+    /// Stop
     #[serde(default)]
     pub stop: Option<Vec<String>>,
+    /// Maximum tokens
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Presence penalty
     #[serde(default)]
     pub presence_penalty: Option<f32>,
+    /// Frequency penalty
     #[serde(default)]
     pub frequency_penalty: Option<f32>,
+    /// User
     #[serde(default)]
     pub user: Option<String>,
+    /// Tools
     #[serde(default)]
     pub tools: Option<Vec<Tool>>,
+    /// Tool choice
     #[serde(default)]
     pub tool_choice: Option<Value>,
     /// Additional fields that might be present
@@ -37,11 +50,15 @@ pub struct ChatCompletionRequest {
 /// Chat message structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
+    /// Role
     pub role: String,
+    /// Content
     #[serde(default)]
     pub content: String,
+    /// Name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Tool calls
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
@@ -49,33 +66,43 @@ pub struct Message {
 /// Tool call structure for function calling
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ToolCall {
+    /// ID
     pub id: String,
+    /// Call type
     #[serde(rename = "type")]
     pub call_type: String,
+    /// Function
     pub function: FunctionCall,
 }
 
 /// Function call details
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FunctionCall {
+    /// Name
     pub name: String,
+    /// Arguments
     pub arguments: String,
 }
 
 /// Tool definition structure
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Tool {
+    /// Tool type
     #[serde(rename = "type")]
-    pub tool_type: String,
+    pub tool_type: String,  
+    /// Function
     pub function: FunctionDefinition,
 }
 
 /// Function definition for tools
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FunctionDefinition {
+    /// Name
     pub name: String,
+    /// Description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Parameters
     pub parameters: Value,
 }
 
@@ -83,67 +110,102 @@ pub struct FunctionDefinition {
 /// This is what we need to return to Goose
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionResponse {
+    /// ID
     pub id: String,
+    /// Object
     pub object: String,
+    /// Created
     pub created: i64,
+    /// Model
     pub model: String,
+    /// Choices
     pub choices: Vec<Choice>,
+    /// Usage
     pub usage: Usage,
 }
 
+/// Choice structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Choice {
+    /// Index
     pub index: u32,
+    /// Message
     pub message: Message,
+    /// Finish reason
     pub finish_reason: Option<String>,
 }
 
+/// Usage structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Usage {
+    /// Prompt tokens
     pub prompt_tokens: u32,
+    /// Completion tokens
     pub completion_tokens: u32,
+    /// Total tokens
     pub total_tokens: u32,
 }
 
 /// Streaming response chunk (for SSE)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChatCompletionChunk {
+    /// ID
     pub id: String,
+    /// Object
     pub object: String,
+    /// Created
     pub created: i64,
+    /// Model
     pub model: String,
+    /// Choices
     pub choices: Vec<ChunkChoice>,
 }
 
+/// Chunk choice structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ChunkChoice {
+    /// Index
     pub index: u32,
+    /// Delta
     pub delta: Delta,
+    /// Finish reason
     pub finish_reason: Option<String>,
 }
 
+/// Delta structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Delta {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Role
     pub role: Option<String>,
+    /// Content
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Tool calls
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Tool calls
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 /// Models list response
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelsResponse {
+    /// Object type
     pub object: String,
+    /// List of models
     pub data: Vec<Model>,
 }
 
+/// Model structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Model {
+    /// Model ID
     pub id: String,
+    /// Object type
     pub object: String,
+    /// Creation timestamp
     pub created: i64,
+    /// Owner of the model
     pub owned_by: String,
 }
 

@@ -102,6 +102,43 @@ fn is_goose_subcommand(arg: &str) -> bool {
     GOOSE_SUBCOMMANDS.contains(&arg)
 }
 
+/// Display a custom help message for the 'c' command
+fn print_help() {
+    println!(r#"
+Command Line Assistant (c) - Your Quick AI Helper
+
+USAGE:
+    c [OPTIONS] [QUERY...]
+
+OPTIONS:
+    -h, --help              Show this help message
+    -i, --interactive       Start an interactive session
+
+EXAMPLES:
+    c -h                    # Show this help
+    c -i                    # Start interactive session
+    c "how do I list files" # Ask a quick question
+    c explain this code     # Multi-word queries work naturally
+
+DESCRIPTION:
+    The 'c' command provides a simplified interface for quick AI assistance.
+    Simply type your question or request as natural text after 'c'.
+
+    Interactive Mode:
+      Use 'c -i' to start a continuous conversation session where you can
+      ask multiple questions and get detailed assistance.
+
+    Quick Queries:
+      Use 'c "your question"' for one-off questions. The AI will provide
+      a response and exit.
+
+NOTES:
+    - Queries are automatically processed as natural language
+    - No special formatting needed - just type naturally
+    - For complex tasks, use interactive mode (-i)
+"#);
+}
+
 /// Validate command-line arguments for security and resource limits
 fn validate_args(args: &[String]) -> Result<()> {
     let mut total_length = 0;
@@ -214,7 +251,7 @@ extensions:
     }
     
     // Release lock (happens automatically when lock_file is dropped)
-    lock_file.unlock()
+    FileExt::unlock(&lock_file)
         .context("Failed to release lock")?;
     
     debug!("Config files ensured successfully");
@@ -223,17 +260,8 @@ extensions:
 
 /// Build the argument vector for the goose command
 fn build_goose_args(args: &[String]) -> Vec<String> {
-    if args.is_empty() {
-        // No arguments - show help
-        debug!("No arguments provided, showing help");
-        return vec!["--help".to_string()];
-    }
-    
-    if args[0] == "-h" || args[0] == "--help" {
-        // Help flag
-        debug!("Help flag detected");
-        return vec!["--help".to_string()];
-    }
+    // Note: args validation and help/subcommand checking happens in main()
+    // This function only handles -i flag and query building
     
     if args[0] == "-i" || args[0] == "--interactive" {
         // Interactive mode
@@ -241,17 +269,11 @@ fn build_goose_args(args: &[String]) -> Vec<String> {
         return vec!["session".to_string()];
     }
     
-    if is_goose_subcommand(&args[0]) {
-        // Direct passthrough of goose subcommands
-        debug!("Passing through goose subcommand: {}", args[0]);
-        return args.to_vec();
-    }
-    
-    // Treat as query text - FIXED: Pass each argument separately
+    // Treat as query text - Pass each argument separately
     debug!("Treating as query with {} arguments", args.len());
     let mut cmd = vec!["run".to_string(), "-t".to_string()];
     
-    // SECURITY FIX: Don't join arguments - pass them separately
+    // SECURITY: Don't join arguments - pass them separately
     // The goose binary will handle them appropriately
     cmd.extend_from_slice(args);
     cmd
@@ -332,6 +354,21 @@ fn main() {
     // Get args first to check for deprecated commands
     let args: Vec<String> = env::args().skip(1).collect();
     debug!("Received {} arguments", args.len());
+    
+    // Check if help is requested or no args provided
+    if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
+        print_help();
+        exit(0);
+    }
+    
+    // Check if first argument is a restricted goose subcommand
+    if !args.is_empty() && is_goose_subcommand(&args[0]) {
+        eprintln!("Error: Direct goose subcommands are not available.");
+        eprintln!("Please use the simplified interface instead.");
+        eprintln!();
+        print_help();
+        exit(1);
+    }
     
     // Validate arguments
     if let Err(e) = validate_args(&args) {
@@ -627,24 +664,7 @@ mod tests {
     // ============================================================================
     // Tests for build_goose_args - CRITICAL for proper command handling
     // ============================================================================
-
-    #[test]
-    fn test_build_goose_args_no_args() {
-        let args: Vec<String> = vec![];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["--help".to_string()]);
-    }
-
-    #[test]
-    fn test_build_goose_args_help_flag() {
-        let args = vec!["-h".to_string()];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["--help".to_string()]);
-        
-        let args = vec!["--help".to_string()];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["--help".to_string()]);
-    }
+    // Note: Help and subcommand checks now happen in main() before calling build_goose_args
 
     #[test]
     fn test_build_goose_args_interactive() {
@@ -655,17 +675,6 @@ mod tests {
         let args = vec!["--interactive".to_string()];
         let result = build_goose_args(&args);
         assert_eq!(result, vec!["session".to_string()]);
-    }
-
-    #[test]
-    fn test_build_goose_args_subcommand_passthrough() {
-        let args = vec!["configure".to_string()];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["configure".to_string()]);
-        
-        let args = vec!["session".to_string(), "arg1".to_string()];
-        let result = build_goose_args(&args);
-        assert_eq!(result, vec!["session".to_string(), "arg1".to_string()]);
     }
 
     #[test]

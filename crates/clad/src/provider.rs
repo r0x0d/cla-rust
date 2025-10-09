@@ -77,15 +77,19 @@ fn current_timestamp() -> i64 {
 /// Error types for the proxy
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    /// Backend service unavailable
     #[error("Backend service unavailable")]
     BackendError(String),
 
+    /// Failed to transform request/response
     #[error("Failed to transform request/response")]
     TransformError(String),
 
+    /// Request timeout
     #[error("Request timeout")]
     TimeoutError,
 
+    /// Internal server error
     #[error("Internal server error")]
     #[allow(dead_code)]
     InternalError(String),
