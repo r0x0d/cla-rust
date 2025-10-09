@@ -1,3 +1,55 @@
 [workspace]
-resolver = "3"
-members = [ "crates/clad","crates/cli"]
+resolver = "2"
+members = [ "crates/clad","crates/cli", "crates/xtask"]
+
+[workspace.package]
+rust-version = "1.84.1"
+
+[profile.release]
+lto = "thin"
+# We use FFI so this is safest
+panic = "abort"
+# We assume we're being delivered via e.g. RPM which supports split debuginfo
+debug = true
+
+[profile.thin]
+# drop bootc size when split debuginfo is not available and go a step
+# further in size optimization (when tested from 140mb, to 12mb without
+# symbols/debuginfo, to 5.8mb with extra optimizations)
+# https://github.com/johnthagen/min-sized-rust
+# cargo build --profile=thin
+inherits = "release"
+debug = false       # Re-strip debug symbols
+strip = true        # Strip symbols from binary
+lto = true          # Use full lto to remove dead code
+opt-level = 's'     # Optimize for size with vector vectorization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations
+
+# See https://github.com/coreos/cargo-vendor-filterer
+[workspace.metadata.vendor-filter]
+# For now we only care about tier 1+2 Linux.  (In practice, it's unlikely there is a tier3-only Linux dependency)
+platforms = ["*-unknown-linux-gnu"]
+tier = "2"
+all-features = true
+
+[workspace.lints.rust]
+# Require an extra opt-in for unsafe
+unsafe_code = "deny"
+# Absolutely must handle errors
+unused_must_use = "forbid"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+# Feel free to comment this one out locally during development of a patch.
+dead_code = "deny"
+# Suppress check-cfg warnings for standard test cfg
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(test)'] }
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+# These should only be in local code
+dbg_macro = "deny"
+todo = "deny"
+# These two are in my experience the lints which are most likely
+# to trigger, and among the least valuable to fix.
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
